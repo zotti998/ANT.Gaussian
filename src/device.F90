@@ -1,5 +1,5 @@
 !*********************************************************!
-!*********************  ANT.G-2.5.1  *********************!
+!*********************  ANT.G-2.5.0  *********************!
 !*********************************************************!
 !                                                         !
 !  Copyright (c) by                                       !
@@ -63,7 +63,7 @@
 
   ! *** Overlap matrix S of device ***
   real*8, dimension(:,:),allocatable :: SD, InvSD
-  real*8, dimension(:,:), allocatable :: S_SOC
+  real*8, dimension(:,:), allocatable :: S_SOC, InvS_SOC
 
   ! *** Complex S^+1/2 matrix ***
   complex*16, dimension(:,:),allocatable :: SPH
@@ -821,7 +821,6 @@
        if (SOC) then 
           call MullPop_SOC
        else 
-          call CompDensMat(ADDP)
           call MullPop
        end if   
  
@@ -903,7 +902,7 @@
     
     logical :: root_fail
     
-    Z=10.0d0*FermiAcc
+    Z=0.1d0
     Delta=FermiAcc
     Epsilon=ChargeAcc*(NCDEl+QExcess)
 
@@ -1009,6 +1008,83 @@
     return
   end subroutine CompDensMat
 
+  subroutine CompDensMat_SOC(ADDP)
+!**************************************************************
+!* Subroutine for determining Fermi energy and density matrix *
+!* for some total charge                                      *
+!**************************************************************
+!* Pre-condition:                                             *
+!*   HC: Fock-matrix                                          *
+!*   shiftup,shiftdown: starting values for Fermi-energies    *
+!* Results:                                                   *
+!*   PC: Density-matrix                                       *
+!*   shiftup,shiftdown: Fermi-energies                        *
+!**************************************************************
+    use numeric, only: SECANT, MULLER, BISEC
+#ifdef G03ROOT
+    use g03Common, only: GetNAE, GetNBE
+#endif
+#ifdef G09ROOT
+    use g09Common, only: GetNAE, GetNBE
+#endif
+    use parameters, only: FermiAcc,ChargeAcc,Max,QExcess
+    !use ieee_arithmetic
+    implicit none
+
+    logical,intent(out) :: ADDP
+    integer :: i,j, k,cond
+    real*8 :: E0,E1,E2,E3,DE,Z, Delta, Epsilon
+    
+    logical :: root_fail
+    
+    Z=0.1d0               
+    Delta=FermiAcc
+    Epsilon=ChargeAcc*(NCDEl+QExcess)
+
+    root_fail = .true.
+    E0=shift-Z 
+    E1=shift
+    E2=shift+Z
+    if (root_fail) then
+        print*,'MULLER method'
+        call MULLER(QTot_SOC,E0,E1,E2,Delta,Epsilon,Max,E3,DE,K,Cond)
+        if(k .eq. Max .or. E2<EMin .or. E2>EMax) then
+           print *, 'Warning: MULLER method failed to find root. Using SECANT.'
+           root_fail = .true.
+        else
+           shift = E3
+           root_fail = .false.
+        end if
+     end if
+     if (root_fail) then
+          print*,'SECANT method'
+          call SECANT(QTot_SOC,E0,E2,Delta,Epsilon,Max,E3,DE,Cond,K)
+          if(k .eq. Max .or. E3<EMin .or. E3>EMax) then
+             print *, 'Warning: SECANT method failed to find root. Using BISEC.'
+             root_fail = .true.
+          else
+             shift = E3
+             root_fail = .false.
+          end if
+       end if
+       if (root_fail) then
+          print *, 'BISEC method'
+          shift = BISEC(QTot_SOC,EMin,EMax,Delta,5*Max,K)
+          DE=Delta
+          if(k.lt.5*Max) root_fail = .false.
+          if(k.ge.5*Max) print *, 'Warning: BISECT method failed to find root. Skipping this cycle.'
+       end if
+
+       write(ifu_log,*)'-----------------------------------------------'
+       write(ifu_log,'(A,F9.5,A,f9.5)') ' Fermi energy= ',-shift,'  +/-',dabs(DE)
+       write(ifu_log,*)
+       write(ifu_log,'(A,F10.5)') ' Total number of electrons:  ', Q_SOC
+       write(ifu_log,*)'-----------------------------------------------'
+    ADDP = .not. root_fail
+    return
+  end subroutine CompDensMat_SOC
+
+
   !**************************************************************
   !* Subroutine for determining Fermi energy and density matrix *
   !* for some total charge                                      *
@@ -1038,7 +1114,7 @@
     
     logical :: root_fail
     
-    Z=10.0d0*FermiAcc
+    Z=0.1d0           
     Delta=FermiAcc
     Epsilon=ChargeAcc*(NCDEl+QExcess)
 
@@ -1136,6 +1212,77 @@
     end if
     ADDP = .not. root_fail
   end subroutine CompDensMat2
+
+!-----------------------------------------------------------------------------
+    subroutine CompDensMat2_SOC(ADDP)
+!**************************************************************
+!* Subroutine for determining Fermi energy and density matrix *
+!* for some total charge with SOC along the imaginary axis    *
+!**************************************************************
+!* Pre-condition:                                             *
+!*   HC: Fock-matrix                                          *
+!*   shift: starting values for Fermi-energies                *
+!* Results:                                                   *
+!*   PC: Density-matrix                                       *
+!*   shift: Fermi-energies                                    *
+!**************************************************************
+
+    use numeric, only: SECANT, MULLER, BISEC
+    use parameters, only: FermiAcc,ChargeAcc,Max,QExcess
+    !use ieee_arithmetic
+    implicit none
+
+    logical,intent(out) :: ADDP
+    integer :: i,j, k,cond
+    real*8 :: E0,E1,E2,E3,DE,Z, Delta, Epsilon
+    
+    logical :: root_fail
+    
+    Z=0.1d0              
+    Delta=FermiAcc
+    Epsilon=ChargeAcc*(NCDEl+QExcess)
+
+    root_fail = .true.
+    E0=shift
+    E1=E0-Z 
+    E2=E0+Z 
+    if( root_fail )then
+       print*,'Secant method'
+       call SECANT(CompPD_SOC,E0,E1,Delta,Epsilon,Max,E2,DE,Cond,K)
+       if(k.eq.Max .or. E2<EMin .or. E2>EMax)then
+          print *, 'Warning: Secant method failed to find root. Using BISEC.'
+          root_fail = .true.
+       else
+          shift = E2
+          root_fail = .false.
+       end if
+    end if
+    if( root_fail )then
+       print*,'Muller method'
+       call MULLER(CompPD_SOC,E0,E1,E2,Delta,Epsilon,Max,E3,DE,K,Cond)
+       if(k.eq.Max .or. E3<EMin .or. E3>EMax)then
+          print *, 'Warning: Muller method failed to find root. Using BISEC.'
+          root_fail = .true.
+       else
+          shift = E3
+          root_fail = .false.
+       end if
+    end if
+    if( root_fail )then
+       print *, 'BISEC method'
+       print *, EMin, EMax
+       shift = BISEC(CompPD_SOC,EMin,EMax,Delta,Max,K)
+       DE=Delta
+       if(k.lt.Max) root_fail = .false.
+    end if
+    write(ifu_log,*)'-----------------------------------------------'
+    write(ifu_log,'(A,F9.5,A,f9.5)') ' Fermi energy= ',-shift,'  +/-',dabs(DE)
+    write(ifu_log,*)
+    write(ifu_log,'(A,F10.5)') ' Number of electrons:  ', Q_SOC
+    write(ifu_log,*)'-----------------------------------------------'
+    ADDP = .not. root_fail
+
+  end subroutine CompDensMat2_SOC
   
   ! 
   ! Computes the density matrix for a fixed chemical potential mu
@@ -1165,7 +1312,7 @@
 
      complex*16, dimension(NAOrbs,NAOrbs) :: GD
 
-     integer, parameter :: nmin=1, nmax=8, npmax=2**nmax-1
+     integer, parameter :: nmin=1, nmax=10, npmax=2**nmax-1
      real*8, dimension(2*npmax) :: x, w
      real*8 :: Ei, dEdx, Q, QQ, DPD, E0 !, Qi
      integer :: n, np, i, j, k, l !, info, ierr
@@ -1201,7 +1348,7 @@
               if( x(i) > 0.5d0 ) Ei = 0.5d0*EMax/(1.0d0-x(i))
               dEdx = 2.0d0*EMax
               if( x(i) > 0.5d0 ) dEdx = 0.5d0*EMax/(1.0d0-x(i))**2   
-              call GPlus0( ui*Ei, GD )
+              call gplus0( ui*Ei, GD )
 !$OMP CRITICAL
               do k=1,NAOrbs
                  do l=1,NAOrbs
@@ -1219,16 +1366,120 @@
         end do
         if(NSpin.eq.1) QBeta=QAlpha
         Q = QAlpha + QBeta        
-        if( n > nmin .and. abs(Q-QQ) < PAcc*NCDEl ) exit
+        if( n > nmin .and. abs(Q-QQ) < PAcc ) exit
+        if (n == nmax) print*, 'Warning!, not enough integration points'
      end do
         
-     print '(A,I4,A)', ' Integration of density matrix  has needed ', np, ' points.'
-     print '(A,F10.5,A,F10.5,A,F8.5)', ' mu =', -mu, '  Num. of electrons =', Q, ' +/-', abs(Q-QQ) 
+     print '(A,I4,A)', ' Integration of density matrix along imaginary axis has needed ', np, ' points.'
+    !print '(A,F10.5,A,F10.5,A,F8.5)', ' mu =', -mu, '  Num. of electrons =', Q, ' +/-', abs(Q-QQ) 
 
      CompPD = Q - dble(NCDEl)
 
   end function CompPD
 
+!------------------------------------------------------------------------------------
+   real*8 function CompPD_SOC( mu )
+! 
+! Computes the density matrix for a fixed chemical potential mu
+! by integrating Greens function on matsubara axis. No lower energy
+! bound required anymore!
+! - Returns number of electrons in device region
+!
+! - replaces old code in functions F(x) and QXTot(x)
+!
+     use constants
+     use util
+     use numeric, only: CHDiag, gauleg, RTrace
+     use parameters, only: eta, PAcc
+!    USE IFLPORT
+     use omp_lib
+     implicit none
+
+     ! chemical potential
+     real*8, intent(in) :: mu
+
+     complex*16, dimension(DNAOrbs,DNAOrbs) :: GD
+
+     integer, parameter :: nmin=1, nmax=10, npmax=2**nmax-1
+     real*8, dimension(2*npmax) :: x, w
+     real*8 :: Ei, dEdx, Q, QQ, DPD, E0 !, Qi
+     integer :: n, np, i, j, k, l !, info, ierr
+     
+     real*8, parameter :: x0 = 0.5d0
+     real*8 :: aa, bb, cc, EM
+
+     EM = EMax
+     aa = EM/x0
+     bb = aa*(1.0d0-x0)**2
+     cc = EM - bb/(1-x0)
+
+     shift = mu
+
+     Q = d_zero
+
+     do n=nmin,nmax
+
+        np=2**n-1
+        
+        QQ = Q
+        Q=d_zero
+        PD_SOC=c_zero
+        
+        ! Compute Gauss-Legendre abcsissas and weights
+        call gauleg(0.0d0,2.0d0,x(1:2*np),w(1:2*np),2*np)
+
+!$OMP PARALLEL PRIVATE(Ei,dEdx,GD,DPD)
+!$OMP DO
+        do i=1,np
+           Ei = 2.0d0*EMax*x(i)
+           if( x(i) > 0.5d0 ) Ei = 0.5d0*EMax/(1.0d0-x(i))
+           dEdx = 2.0d0*EMax
+           if( x(i) > 0.5d0 ) dEdx = 0.5d0*EMax/(1.0d0-x(i))**2   
+           call gplus0_SOC( ui*Ei, GD )
+!$OMP CRITICAL
+           do k=1,DNAOrbs
+              do l=1,DNAOrbs
+                 PD_SOC(k,l) = PD_SOC(k,l) + w(i)*(dEdx*real(GD(k,l))/d_pi + 0.5d0*InvS_SOC(k,l))
+                !PD_SOC(l,k) = PD_SOC(k,l)
+              end do
+           end do
+!$OMP END CRITICAL
+        end do
+!$OMP END DO
+!$OMP BARRIER
+!$OMP END PARALLEL
+
+!Symmetrizing density matrix by making zero non-symmetric elements
+        do k=1,DNAOrbs
+           do l=k+1,DNAOrbs
+              if (zabs(PD_SOC(k,l)-PD_SOC(l,k)) > eta) then
+                !PD_SOC(l,k)=PD_SOC(k,l)
+                !print*,k,l
+                !PD_SOC(k,l)=c_zero
+                !PD_SOC(l,k)=c_zero
+              end if 
+           end do
+        end do
+
+        do k=1,DNAOrbs
+           do l=1,DNAOrbs
+              Q = Q + real(PD_SOC(k,l))*S_SOC(l,k)
+           end do
+        end do
+        if( n > nmin .and. abs(Q-QQ) < PAcc ) exit
+        if (n == nmax) print*, 'Warning!, not enough integration points'
+     end do
+        
+     print '(A,I4,A)', ' Integration of density matrix along imaginary axis has needed ', np, ' points.'
+     print '(A,F10.5,A,F10.5,A,F8.5)', ' mu =', -mu, '  Num. of electrons =', Q, ' +/-', abs(Q-QQ) 
+
+     Q_SOC = Q
+
+     CompPD_SOC = Q - dble(NCDEl)
+
+  end function CompPD_SOC
+
+!-------------------------------------------------------------------------------------
   
   ! 
   ! Computes the spin-resolved density matrix for a fixed chemical potential mu
@@ -1302,7 +1553,7 @@
 !$OMP END DO
 !$OMP BARRIER
 !$OMP END PARALLEL
-        if( n > nmin .and. abs(Q-QQ) < PAcc*NCDAB ) exit
+        if( n > nmin .and. abs(Q-QQ) < PAcc ) exit
      end do
         
      print '(A,I4,A)', ' Integration of density matrix has needed ', np, ' points.'
@@ -1857,6 +2108,7 @@
        M=1000
 
        call IntCompPlane_SOC(rrr,a,b,M,d_zero-dabs(biasvoltage/2.0))
+      !call IntRealAxis_SOC(Emin,-dabs(biasvoltage/2.0),M)
 
        ! Density matrix out of equilibirum
        if (biasvoltage /= 0.0) then
@@ -1998,24 +2250,43 @@
   ! Mulliken population analysis !
   !******************************!
   subroutine MullPop
-    use cluster, only: NALead, NAMol, NAOAtom, NAOMol
-    USE parameters, only: Mulliken, LDOS_Beg, LDOS_End
+    use cluster, only: NALead, NAMol, NAOAtom, NAOMol, LoAOrbNo, HiAOrbNo
+    USE parameters, only: Mulliken, LDOS_Beg, LDOS_End, PrtHatom
 #ifdef G03ROOT
-    use g03Common, only: GetAtmCo
+    use g03Common, only: GetAtmCo, GetNAtoms
 #endif
 #ifdef G09ROOT
-    use g09Common, only: GetAtmCo
+    use g09Common, only: GetAtmCo, GetNAtoms
 #endif
     use constants, only: Bohr
     implicit none
 
-    integer :: i,j, I1, is ,n, l
+    integer :: i,j, I1, is ,n, l, iAtom, jAtom
     real*8 :: sdeg, ro_a, ro_b, chargemol, chargelead1, chargelead2, spinlead1, spinlead2, spinmol
     real*8, dimension(NAOrbs,NAOrbs) :: rho_a, rho_b
  
     write(ifu_log,*)'-------------------------------------'
     write(ifu_log,*)'---  Mulliken population analysis ---'
     write(ifu_log,*)'-------------------------------------'
+    
+    if (PrtHatom > 1) then
+       do iAtom=1,GetNAtoms()
+          do jAtom=1,GetNAtoms()
+             !if( SpinEdit(iAtom) == -1 .and. SpinEdit(jAtom) == -1 )then
+             if( iAtom == PrtHatom .and. jAtom == PrtHatom )then
+                PRINT *, " Density matrix atom ",iAtom," is: "
+                PRINT *, " Up-Up "  
+                do i=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)                                                               
+                   PRINT '(1000(F11.5))', ( (PD(1,i,j)), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom) )               
+                end do                                                                                                       
+                PRINT *, " Down-Down "                                                                              
+                do i=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)                                                            
+                   PRINT '(1000(F11.5))', ( (PD(2,i,j)), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom) )             
+                end do                                                                              
+             end if   
+          end do
+       end do
+    end if          
     
     if (NSpin.eq.2) sdeg=1.0d0
     if (NSpin.eq.1) sdeg=2.0d0
@@ -2150,18 +2421,18 @@
   ! Mulliken population analysis with non-collinear or SOC hamiltonian!
   !*******************************************************************!
   subroutine MullPop_SOC
-    use cluster, only: NALead, NAMol, NAOAtom, NAOMol
-    USE parameters, only: Mulliken, LDOS_Beg, LDOS_End, biasvoltage
+    use cluster, only: NALead, NAMol, NAOAtom, NAOMol, LoAOrbNo, HiAOrbNo
+    USE parameters, only: Mulliken, LDOS_Beg, LDOS_End, biasvoltage, PrtHatom
 #ifdef G03ROOT
-    use g03Common, only: GetAtmCo
+    use g03Common, only: GetAtmCo, GetNAtoms
 #endif
 #ifdef G09ROOT
-    use g09Common, only: GetAtmCo
+    use g09Common, only: GetAtmCo, GetNAtoms
 #endif
     use constants, only: Bohr, d_zero, c_zero
     implicit none
 
-    integer :: i,j, I1, is ,n, l
+    integer :: i,j, I1, is ,n, l, iAtom, jAtom
     real*8 :: sdeg, ro_a, ro_ab, ro_ba, ro_ab_I, ro_ba_I, ro_b, spindens, chargemol, chargelead1, chargelead2, spinlead1, spinlead2, spinmol
     real*8, dimension(NAOrbs,NAOrbs) :: rho_a, rho_ab, rho_ba, rho_ab_I, rho_ba_I, rho_b, tmp, PD_SOC_UU, S_SOC_UU, PD_SOC_UD, PD_SOC_UD_I, S_SOC_UD, PD_SOC_DU, PD_SOC_DU_I, S_SOC_DU, PD_SOC_DD, S_SOC_DD  
 
@@ -2204,6 +2475,50 @@
     
    !if (NSpin.eq.2) sdeg=1.0d0
    !if (NSpin.eq.1) sdeg=2.0d0
+   
+    if (PrtHatom > 0) then
+       do iAtom=1,GetNAtoms()
+          do jAtom=1,GetNAtoms()
+             if( iAtom == PrtHatom .and. jAtom == PrtHatom )then    
+                 PRINT *, "Real part of PD_SOC matrix for atom ", PrtHatom
+                 PRINT *, "Up-Up" 
+                 do i=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)
+                     PRINT '(1000(F11.5))',  ( REAL(PD_SOC( i, j )), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom) ) 
+                 end do  
+                 PRINT *, "Up-Down" 
+                 do i=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)
+                     PRINT '(1000(F11.5))',  ( REAL(PD_SOC( i, j )), j=NAOrbs+LoAOrbNo(PrtHatom),NAOrbs+HiAOrbNo(PrtHatom) ) 
+                 end do  
+                 PRINT *, "Down-Up"
+                 do i=NAOrbs+LoAOrbNo(PrtHatom),NAOrbs+HiAOrbNo(PrtHatom)                                                     
+                     PRINT '(1000(F11.5))',  ( REAL(PD_SOC( i, j )), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom) ) 
+                 end do                                   
+                 PRINT *, "Down-Down"
+                 do i=NAOrbs+LoAOrbNo(PrtHatom),NAOrbs+HiAOrbNo(PrtHatom)                                                     
+                     PRINT '(1000(F11.5))',  ( REAL(PD_SOC( i, j )), j=NAOrbs+LoAOrbNo(PrtHatom),NAOrbs+HiAOrbNo(PrtHatom) ) 
+                 end do                                   
+                 
+                 PRINT *, "Imaginary part of PD_SOC matrix for atom ", PrtHatom
+                 PRINT *, "Up-Up" 
+                 do i=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)
+                     PRINT '(1000(F11.5))',  ( AIMAG(PD_SOC( i, j )), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom) ) 
+                 end do  
+                 PRINT *, "Up-Down" 
+                 do i=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)
+                     PRINT '(1000(F11.5))',  ( AIMAG(PD_SOC( i, j )), j=NAOrbs+LoAOrbNo(PrtHatom),NAOrbs+HiAOrbNo(PrtHatom) ) 
+                 end do  
+                 PRINT *, "Down-Up"
+                 do i=NAOrbs+LoAOrbNo(PrtHatom),NAOrbs+HiAOrbNo(PrtHatom)                                                     
+                     PRINT '(1000(F11.5))',  ( AIMAG(PD_SOC( i, j )), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom) ) 
+                 end do                                   
+                 PRINT *, "Down-Down"
+                 do i=NAOrbs+LoAOrbNo(PrtHatom),NAOrbs+HiAOrbNo(PrtHatom)                                                     
+                     PRINT '(1000(F11.5))',  ( AIMAG(PD_SOC( i, j )), j=NAOrbs+LoAOrbNo(PrtHatom),NAOrbs+HiAOrbNo(PrtHatom) ) 
+                 end do
+             end if   
+          end do
+       end do      
+    end if    
 
     rho_a = matmul( PD_SOC_UU, S_SOC_UU )+matmul( PD_SOC_UD,S_SOC_DU )
     rho_b = matmul( PD_SOC_DU, S_SOC_UD )+matmul( PD_SOC_DD, S_SOC_DD )
@@ -2484,8 +2799,8 @@
   subroutine transmission
     use Cluster, only : hiaorbno, loaorbno
     use constants, only: c_one, c_zero, d_zero, d_pi
-    use parameters, only: NChannels,HTransm,EW1,EW2,EStep,LDOS_Beg,LDOS_End, DOSEnergy, SOC, FermiAcc, QExcess, ChargeAcc
-    use numeric, only: CMatPow, CHDiag, CDiag, sort, MULLER
+    use parameters, only: NChannels,HTransm,EW1,EW2,EStep,LDOS_Beg,LDOS_End, DOSEnergy, SOC, FermiAcc, QExcess, ChargeAcc, DMIMAG
+    use numeric, only: CMatPow, CHDiag, CDiag, sort, MULLER, RMatPow
     use preproc, only: MaxAtm
 #ifdef PGI
     use lapack_blas, only: zgemm
@@ -2508,13 +2823,12 @@
     integer :: n, nsteps, i, imin, imax, info, j, AllocErr, cond, k
     integer :: Max = 20
     complex*16, dimension(:,:), allocatable :: GammaL, GammaR, Green, T, temp, SG
-    complex*16, dimension(:,:), allocatable :: DGammaL, DGammaR, GammaL_UU, GammaR_UU, GammaL_DD, GammaR_DD, DGreen, DT, Dtemp, DSG
-    complex*16, dimension(:,:), allocatable :: Green_UU, Green_DD, Green_UD, Green_DU
+    complex*16, dimension(:,:), allocatable :: DGammaL, DGammaR, DGreen, DT, Dtemp, DSG
     complex*16, dimension(:,:),allocatable :: dummy
     real*8, dimension(:), allocatable :: tn,Dtn
     complex*16, dimension(:), allocatable :: ctn,Dctn
     real*8, dimension(:),allocatable   :: tchan1,tchan2
-    real*8   :: t_uu,t_dd,t_ud,t_du,polar,trans2
+    logical :: ADDP
 
     print *
     print *, "--------------------------------"
@@ -2524,28 +2838,14 @@
     print *
 
     if (SOC) then
+
        write(ifu_log,*)' Adding spin-orbit coupling ... and finding new Fermi level'
+
        allocate(DGammaL(DNAOrbs,DNAOrbs), STAT=AllocErr)
-       if( AllocErr /= 0 ) stop
-       allocate(GammaL_UU(NAOrbs,NAOrbs), STAT=AllocErr)
-       if( AllocErr /= 0 ) stop
-       allocate(GammaL_DD(NAOrbs,NAOrbs), STAT=AllocErr)
        if( AllocErr /= 0 ) stop
        allocate(DGammaR(DNAOrbs,DNAOrbs), STAT=AllocErr)
        if( AllocErr /= 0 ) stop
-       allocate(GammaR_UU(NAOrbs,NAOrbs), STAT=AllocErr)
-       if( AllocErr /= 0 ) stop
-       allocate(GammaR_DD(NAOrbs,NAOrbs), STAT=AllocErr)
-       if( AllocErr /= 0 ) stop
        allocate(DGreen(DNAOrbs,DNAOrbs), STAT=AllocErr)
-       if( AllocErr /= 0 ) stop
-       allocate(Green_UU(NAOrbs,NAOrbs), STAT=AllocErr)
-       if( AllocErr /= 0 ) stop
-       allocate(Green_UD(NAOrbs,NAOrbs), STAT=AllocErr)
-       if( AllocErr /= 0 ) stop
-       allocate(Green_DU(NAOrbs,NAOrbs), STAT=AllocErr)
-       if( AllocErr /= 0 ) stop
-       allocate(Green_DD(NAOrbs,NAOrbs), STAT=AllocErr)
        if( AllocErr /= 0 ) stop
        allocate(DT(DNAOrbs,DNAOrbs), STAT=AllocErr)
        if( AllocErr /= 0 ) stop
@@ -2554,6 +2854,8 @@
        allocate(DSG(DNAOrbs,DNAOrbs), STAT=AllocErr)
        if( AllocErr /= 0 ) stop
        allocate(S_SOC(DNAOrbs,DNAOrbs), STAT=AllocErr)
+       if( AllocErr /= 0 ) stop
+       allocate(InvS_SOC(DNAOrbs,DNAOrbs), STAT=AllocErr)
        if( AllocErr /= 0 ) stop
        allocate(H_SOC(DNAOrbs,DNAOrbs), STAT=AllocErr)
        if( AllocErr /= 0 ) stop
@@ -2565,14 +2867,12 @@
        if( AllocErr /= 0 ) stop
        allocate(Dctn(DNAOrbs), STAT=AllocErr)
        if( AllocErr /= 0 ) stop
-       allocate(T(NAOrbs,NAOrbs), STAT=AllocErr)
-       if( AllocErr /= 0 ) stop
-       allocate(temp(NAOrbs,NAOrbs), STAT=AllocErr)
-       if( AllocErr /= 0 ) stop
        DSG=c_zero
        DT=c_zero
        Dtemp=c_zero
        S_SOC=d_zero
+       H_SOC=c_zero
+       InvS_SOC=d_zero
 
        call spin_orbit
        
@@ -2605,32 +2905,20 @@
     if( AllocErr /= 0 ) stop
 
     if (SOC) then
-      
-    ! finding new Fermi energy with SOC
-
-       E0=shift-0.1d0                
-       E1=shift
-       E2=shift+0.1d0
-       Delta=FermiAcc
-       Epsilon=ChargeAcc*(NCDEl+QExcess)
-       print*,'MULLER method'
-       if (NSpin == 1) then
-          call MULLER(QTot_SOC,E0,E1,E2,Delta,Epsilon,Max,E3,DE,K,Cond)
-       else
-          call MULLER(QXTot_SOC,E0,E1,E2,Delta,Epsilon,Max,E3,DE,K,Cond)
+       if (DMIMAG) then
+          call RMatPow( S_SOC, -1.0d0, InvS_SOC )
+          call CompDensMat2_SOC(ADDP)
+       else   
+          call CompDensMat_SOC(ADDP)
        end if 
-       if(k .eq. Max .or. E2<EMin .or. E2>EMax) then
-         write(ifu_log,*) 'I could not accurately find the new Fermi level ...'
-         write(ifu_log,*) ' ...using the best approximation'
-       end if
-       shift = E3
-       write(ifu_log,*)'-----------------------------------------------'
-       write(ifu_log,'(A,F9.5,A,f9.5)') ' Fermi energy= ',-shift,'  +/-',dabs(DE)
-       write(ifu_log,*)
-       write(ifu_log,'(A,F10.5)') ' Number of electrons:  ', Q_SOC
-       write(ifu_log,*)'-----------------------------------------------'
-    end if
-         
+    else
+       if (DMIMAG) then
+          call CompDensMat2(ADDP)
+       else
+          call CompDensMat(ADDP)
+       end if 
+    end if 
+
     nsteps = (EW2-EW1)/EStep + 1
 
     do ispin=1,NSpin
@@ -2747,7 +3035,7 @@
        else !SOC case
 
 #ifdef PGI
-!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(n,cenergy,energy,Dgreen,Dgammar,Dgammal,DT,Dtemp,GammaR_UU,GammaR_DD,GammaL_UU,GammaL_DD,Green_UU,Green_DD,Green_UD,Green_DU,polar,trans2,t_uu,t_dd,t_ud,t_du,temp,T) 
+!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(n,cenergy,energy,Dgreen,Dgammar,Dgammal,DT,Dtemp) 
 !$OMP DO SCHEDULE(STATIC,10)
 #endif
        do n=1,nsteps
@@ -2818,75 +3106,9 @@
              tchan2=tn(DNAOrbs-NChannels+1:DNAOrbs)
           end if
 
-
-     ! Computing polarization
-
-       T_uu=0.0d0
-       T_ud=0.0d0
-       T_du=0.0d0
-       T_dd=0.0d0
-
-
-             do i=1,NAOrbs
-             do j=1,NAOrbs
-                GammaR_UU(i,j) = DGammaR(i,j)
-                GammaR_DD(i,j) = DGammaR(i+NAOrbs,j+NAOrbs)
-                GammaL_UU(i,j) = DGammaL(i,j)
-                GammaL_DD(i,j) = DGammaL(i+NAOrbs,j+NAOrbs)
-                Green_UU(i,j) = DGreen(i,j)
-                Green_DD(i,j) = DGreen(i+NAOrbs,j+NAOrbs)
-                Green_UD(i,j) = DGreen(i,j+NAOrbs)
-                Green_DU(i,j) = DGreen(i+NAOrbs,j)
-             end do
-             end do
-
-! up-up
-          T=0.0d0
-          temp=0.0d0
-             call zgemm('N','C',NAOrbs,NAOrbs,NAOrbs,c_one, GammaL_UU,NAOrbs, Green_UU,  NAOrbs, c_zero, T,    NAOrbs)
-             call zgemm('N','N',NAOrbs,NAOrbs,NAOrbs,c_one, T,     NAOrbs, GammaR_UU, NAOrbs, c_zero, temp, NAOrbs)
-             call zgemm('N','N',NAOrbs,NAOrbs,NAOrbs,c_one, temp,  NAOrbs, Green_UU,  NAOrbs, c_zero, T,    NAOrbs)
-
-             do i=1,NAOrbs
-                T_uu = T_uu+REAL(T(i,i))
-             end do
-! up-down
-          T=0.0d0
-          temp=0.0d0
-             call zgemm('N','C',NAOrbs,NAOrbs,NAOrbs,c_one, GammaL_UU,NAOrbs, Green_UD,  NAOrbs, c_zero, T,    NAOrbs)
-             call zgemm('N','N',NAOrbs,NAOrbs,NAOrbs,c_one, T,     NAOrbs, GammaR_DD, NAOrbs, c_zero, temp, NAOrbs)
-             call zgemm('N','N',NAOrbs,NAOrbs,NAOrbs,c_one, temp,  NAOrbs, Green_UD,  NAOrbs, c_zero, T,    NAOrbs)
-
-             do i=1,NAOrbs
-                T_ud = T_ud+REAL(T(i,i))
-             end do
-! down-up
-          T=0.0d0
-          temp=0.0d0
-             call zgemm('N','C',NAOrbs,NAOrbs,NAOrbs,c_one, GammaL_DD,NAOrbs, Green_DU,  NAOrbs, c_zero, T,    NAOrbs)
-             call zgemm('N','N',NAOrbs,NAOrbs,NAOrbs,c_one, T,     NAOrbs, GammaR_UU, NAOrbs, c_zero, temp, NAOrbs)
-             call zgemm('N','N',NAOrbs,NAOrbs,NAOrbs,c_one, temp,  NAOrbs, Green_DU,  NAOrbs, c_zero, T,    NAOrbs)
-
-             do i=1,NAOrbs
-                T_du = T_du+REAL(T(i,i))
-             end do
-! down-down
-          T=0.0d0
-          temp=0.0d0
-             call zgemm('N','C',NAOrbs,NAOrbs,NAOrbs,c_one, GammaL_DD,NAOrbs, Green_DD,  NAOrbs, c_zero, T,    NAOrbs)
-             call zgemm('N','N',NAOrbs,NAOrbs,NAOrbs,c_one, T,     NAOrbs, GammaR_DD, NAOrbs, c_zero, temp, NAOrbs)
-             call zgemm('N','N',NAOrbs,NAOrbs,NAOrbs,c_one, temp,  NAOrbs, Green_DD,  NAOrbs, c_zero, T,    NAOrbs)
-
-             do i=1,NAOrbs
-                T_dd = T_dd+REAL(T(i,i))
-             end do
-
-          polar = t_uu + t_du - t_dd - t_ud
-          trans2 = t_uu + t_du + t_dd + t_ud
-
           call flush(334)
           !write(334,1002)energy,trans,(Dtn(i),i=DNAOrbs,DNAOrbs-NChannels+1,-1)
-          write(334,1002)energy,trans*2.0,trans2,polar
+          write(334,1002)energy,trans
 
 #ifdef PGI
 !$OMP END CRITICAL
@@ -3701,10 +3923,10 @@
       !print*, n,16*CH*(El-Er)/(6*(n+1))
     ! Stopping?
    !print*, n,(CH-xp)*(CH-xp)*16-3*(n+1)*abs(CH-q)*PAcc
-     if ((CH-xp)*(CH-xp)*16.gt.3*(n+1)*abs(CH-q)*PAcc*10.and.n.le.M) goto 1
+     if ((CH-xp)*(CH-xp)*16.gt.3*(n+1)*abs(CH-q)*PAcc.and.n.le.M) goto 1
     ! Test for successfullness and integral final value
     M = 0
-     if ((CH-xp)*(CH-xp)*16.gt.3*(n+1)*abs(CH-q)*PAcc*10) M = 1
+     if ((CH-xp)*(CH-xp)*16.gt.3*(n+1)*abs(CH-q)*PAcc) M = 1
 
     do i=1,DNAOrbs
        do j=1,DNAOrbs
@@ -3940,14 +4162,14 @@
        EE(1) = rrr*exp(ui*erp)-rrr+Eq
        EE(2) = rrr*exp(ui*erm)-rrr+Eq
 ! Useful in case of nesting is allowed
-!!$OMP  PARALLEL SHARED(l) PRIVATE(k)
-!!$OMP  DO SCHEDULE(DYNAMIC,1)
+!$OMP  PARALLEL SHARED(l) PRIVATE(k)
+!$OMP  DO SCHEDULE(DYNAMIC,1)
        do k=1,2
           !print *,'l',l,'k',k,omp_get_thread_num()
           call gplus0(EE(k),greenn(k,:,:))
        end do
-!!$OMP  END DO
-!!$OMP  END PARALLEL
+!$OMP  END DO
+!$OMP  END PARALLEL
        do i = 1,NAOrbs
           do j = 1,NAOrbs
              PDP(i,j) = PDP(i,j)+ a*(dimag(ui*rrr*exp(ui*erp)*greenn(1,i,j))*der0 &
@@ -4077,14 +4299,14 @@
        EE(1) = rrr*exp(ui*erp)-rrr+Eq
        EE(2) = rrr*exp(ui*erm)-rrr+Eq
 ! Useful in case of nesting is allowed
-!!$OMP  PARALLEL SHARED(l) PRIVATE(k)
-!!$OMP  DO SCHEDULE(DYNAMIC,1)
+!$OMP  PARALLEL SHARED(l) PRIVATE(k)
+!$OMP  DO SCHEDULE(DYNAMIC,1)
        do k=1,2
           !print *,'l',l,'k',k,omp_get_thread_num()
           call gplus0_SOC(EE(k),greenn(k,:,:))
        end do
-!!$OMP  END DO
-!!$OMP  END PARALLEL
+!$OMP  END DO
+!$OMP  END PARALLEL
        do i = 1,DNAOrbs
           do j = 1,DNAOrbs
              PDP(i,j) = PDP(i,j)+ a*(dimag(ui*rrr*exp(ui*erp)*greenn(1,i,j))*der0 &
@@ -4240,7 +4462,11 @@
     green=c_zero
     sigmar=c_zero
     sigmal=c_zero
-    sigr1=-ui*eta*SD 
+    sigr1=c_zero    
+    sigl1=c_zero     
+    sigr2=c_zero     
+    sigl2=c_zero     
+    sigr1=-ui*eta*SD
     sigl1=-ui*eta*SD 
     sigr2=-ui*eta*SD 
     sigl2=-ui*eta*SD 
@@ -4282,7 +4508,7 @@
 
     do i=1,DNAOrbs
        do j=1,DNAOrbs
-          green(i,j)=(z-shift)*S_SOC(i,j)-H_SOC(i,j)-sigmal(i,j)-sigmar(i,j)
+         green(i,j)=(z-shift)*S_SOC(i,j)-H_SOC(i,j)-sigmal(i,j)-sigmar(i,j)
        enddo
     enddo
 
@@ -4309,8 +4535,8 @@
     use g09Common, only: GetNShell, GetNAtoms
 #endif    
       
-    complex*16, dimension(DNAOrbs,DNAOrbs) :: hamil, hamil_SO, overlap_SO
-    integer :: i,j,totdim,nshell,Atom
+    complex*16, dimension(DNAOrbs,DNAOrbs) :: hamil, hamil_SO, overlap_SO, hamilrot
+    integer :: i,j,totdim,nshell,Atom, iAtom, jAtom
     real*8 :: uno
  
  Atom = PrtHatom   
@@ -4349,7 +4575,8 @@
  
  nshell = GetNShell()
  
- CALL CompHSO(hamil_SO,HD,hamil,SD,overlap_SO,NAOrbs,nshell)
+ CALL CompHSO(hamil_SO,HD,hamilrot,SD,overlap_SO,NAOrbs,nshell)
+!CALL CompHSO(hamil_SO,HD,SD,overlap_SO,NAOrbs,nshell)
  
 !PRINT *, "hamil_SO matrix real part:"
 !do i=1, totdim*2
@@ -4371,41 +4598,49 @@
 !    PRINT '(1000(F11.5))',  ( (HD(2, i, j )), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)) 
 !end do                                                            
 !
- PRINT *, "Real part of hamil_so matrix for atom ", PrtHatom
- PRINT *, "Up-Up" 
- do i=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)
-     PRINT '(1000(F11.5))',  ( REAL(hamil_so( i, j )), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom) ) 
- end do  
- PRINT *, "Up-Down" 
- do i=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)
-     PRINT '(1000(F11.5))',  ( REAL(hamil_so( i, j )), j=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom) ) 
- end do  
- PRINT *, "Down-Up"
- do i=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom)                                                     
-     PRINT '(1000(F11.5))',  ( REAL(hamil_so( i, j )), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom) ) 
- end do                                   
- PRINT *, "Down-Down"
- do i=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom)                                                     
-     PRINT '(1000(F11.5))',  ( REAL(hamil_so( i, j )), j=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom) ) 
- end do                                   
- 
- PRINT *, "Imaginary part of hamil_so matrix for atom ", PrtHatom
- PRINT *, "Up-Up" 
- do i=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)
-     PRINT '(1000(F11.5))',  ( AIMAG(hamil_so( i, j )), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom) ) 
- end do  
- PRINT *, "Up-Down" 
- do i=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)
-     PRINT '(1000(F11.5))',  ( AIMAG(hamil_so( i, j )), j=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom) ) 
- end do  
- PRINT *, "Down-Up"
- do i=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom)                                                     
-     PRINT '(1000(F11.5))',  ( AIMAG(hamil_so( i, j )), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom) ) 
- end do                                   
- PRINT *, "Down-Down"
- do i=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom)                                                     
-     PRINT '(1000(F11.5))',  ( AIMAG(hamil_so( i, j )), j=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom) ) 
- end do  
+    if (PrtHatom > 0) then
+       do iAtom=1,GetNAtoms()
+          do jAtom=1,GetNAtoms()
+             if( iAtom == PrtHatom .and. jAtom == PrtHatom )then
+                 PRINT *, "Real part of hamil_so matrix for atom ", PrtHatom
+                 PRINT *, "Up-Up" 
+                 do i=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)
+                     PRINT '(1000(F11.5))',  ( REAL(hamil_so( i, j )), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom) ) 
+                 end do  
+                 PRINT *, "Up-Down" 
+                 do i=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)
+                     PRINT '(1000(F11.5))',  ( REAL(hamil_so( i, j )), j=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom) ) 
+                 end do  
+                 PRINT *, "Down-Up"
+                 do i=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom)                                                     
+                     PRINT '(1000(F11.5))',  ( REAL(hamil_so( i, j )), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom) ) 
+                 end do                                   
+                 PRINT *, "Down-Down"
+                 do i=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom)                                                     
+                     PRINT '(1000(F11.5))',  ( REAL(hamil_so( i, j )), j=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom) ) 
+                 end do                                   
+                 
+                 PRINT *, "Imaginary part of hamil_so matrix for atom ", PrtHatom
+                 PRINT *, "Up-Up" 
+                 do i=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)
+                     PRINT '(1000(F11.5))',  ( AIMAG(hamil_so( i, j )), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom) ) 
+                 end do  
+                 PRINT *, "Up-Down" 
+                 do i=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)
+                     PRINT '(1000(F11.5))',  ( AIMAG(hamil_so( i, j )), j=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom) ) 
+                 end do  
+                 PRINT *, "Down-Up"
+                 do i=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom)                                                     
+                     PRINT '(1000(F11.5))',  ( AIMAG(hamil_so( i, j )), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom) ) 
+                 end do                                   
+                 PRINT *, "Down-Down"
+                 do i=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom)                                                     
+                     PRINT '(1000(F11.5))',  ( AIMAG(hamil_so( i, j )), j=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom) ) 
+                 end do
+              end if   
+          end do
+       end do
+    end if    
 
 
 !PRINT *, "Hamil matrix for atom ",Atom," : "
@@ -4432,11 +4667,51 @@ end do
        S_SOC(i,j)=REAL(overlap_SO(i,j))
     end do
  end do
-!uno=0.0d0
-!do i=1, totdim*2
-!      uno=uno+S_SOC(i,i)
-!end do
-!print*,'uno',uno
+
+    if (PrtHatom > 0) then
+       do iAtom=1,GetNAtoms()
+          do jAtom=1,GetNAtoms()
+             if( iAtom == PrtHatom .and. jAtom == PrtHatom )then
+                 PRINT *, "Real part of H_SOC matrix for atom ", PrtHatom
+                 PRINT *, "Up-Up" 
+                 do i=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)
+                     PRINT '(1000(F11.5))',  ( REAL(H_SOC( i, j )), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom) ) 
+                 end do  
+                 PRINT *, "Up-Down" 
+                 do i=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)
+                     PRINT '(1000(F11.5))',  ( REAL(H_SOC( i, j )), j=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom) ) 
+                 end do  
+                 PRINT *, "Down-Up"
+                 do i=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom)                                                     
+                     PRINT '(1000(F11.5))',  ( REAL(H_SOC( i, j )), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom) ) 
+                 end do                                   
+                 PRINT *, "Down-Down"
+                 do i=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom)                                                     
+                     PRINT '(1000(F11.5))',  ( REAL(H_SOC( i, j )), j=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom) ) 
+                 end do                                   
+                 
+                 PRINT *, "Imaginary part of H_SOC matrix for atom ", PrtHatom
+                 PRINT *, "Up-Up" 
+                 do i=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)
+                     PRINT '(1000(F11.5))',  ( AIMAG(H_SOC( i, j )), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom) ) 
+                 end do  
+                 PRINT *, "Up-Down" 
+                 do i=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom)
+                     PRINT '(1000(F11.5))',  ( AIMAG(H_SOC( i, j )), j=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom) ) 
+                 end do  
+                 PRINT *, "Down-Up"
+                 do i=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom)                                                     
+                     PRINT '(1000(F11.5))',  ( AIMAG(H_SOC( i, j )), j=LoAOrbNo(PrtHatom),HiAOrbNo(PrtHatom) ) 
+                 end do                                   
+                 PRINT *, "Down-Down"
+                 do i=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom)                                                     
+                     PRINT '(1000(F11.5))',  ( AIMAG(H_SOC( i, j )), j=totdim+LoAOrbNo(PrtHatom),totdim+HiAOrbNo(PrtHatom) ) 
+                 end do
+              end if   
+          end do
+       end do
+    end if    
+
 
  return
  end subroutine spin_orbit
